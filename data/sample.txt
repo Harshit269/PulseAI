@@ -1,0 +1,9 @@
+Dengue fever is a mosquito-borne viral infection. Common symptoms include high fever, severe headache, pain behind the eyes, joint and muscle pain, nausea, vomiting, swollen glands, and rash.
+
+Influenza (flu) is a viral infection that attacks the respiratory system. Symptoms include fever, chills, muscle aches, cough, congestion, runny nose, headaches, and fatigue.
+
+Malaria is a life-threatening disease transmitted through the bite of infected mosquitoes. Symptoms include fever, chills, sweating, headache, nausea, vomiting, and muscle pain.
+
+Typhoid fever is caused by Salmonella bacteria. Symptoms include prolonged fever, weakness, stomach pain, headache, loss of appetite, and sometimes rash.
+
+COVID-19 is a respiratory illness caused by the coronavirus SARS-CoV-2. Symptoms include fever, cough, tiredness, loss of taste or smell, sore throat, and difficulty breathing in severe cases.

@@ -1,0 +1,6 @@
+pinecone
+sentence-transformers
+datasets
+python-dotenv
+requests
+groq

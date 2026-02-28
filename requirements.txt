@@ -4,3 +4,6 @@ datasets
 python-dotenv
 requests
 groq
+fastapi
+uvicorn[standard]
+python-multipart

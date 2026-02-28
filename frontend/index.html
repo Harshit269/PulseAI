@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pulse AI - Symptom Checker</title>
+  <meta name="description" content="Pulse AI uses medical research and artificial intelligence to provide symptom-based health insights. Not a substitute for professional medical advice." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- Disclaimer Modal -->
+  <div class="modal-overlay" id="disclaimerModal">
+    <div class="modal">
+      <div class="modal-badge">Medical Disclaimer</div>
+      <h2 class="modal-title">Before You Continue</h2>
+      <p class="modal-text">
+        Pulse AI is an informational tool powered by AI and medical research literature.
+        It is designed to surface relevant information from medical databases based on your described symptoms.
+      </p>
+      <p class="modal-text">
+        Pulse AI does <strong>not</strong> provide a medical diagnosis. The information it presents
+        should never replace consultation with a licensed healthcare professional. In case of emergency,
+        please contact emergency services immediately.
+      </p>
+      <button class="modal-btn" id="acceptBtn">I Understand, Continue</button>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div class="app" id="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark"></div>
+        <span class="logo-text">Pulse AI</span>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">About</p>
+        <p class="sidebar-info">
+          Pulse AI uses a Retrieval-Augmented Generation pipeline backed by PubMed research to provide symptom-based health insights.
+        </p>
+      </div>
+      <div class="sidebar-section">
+        <p class="sidebar-label">Example Queries</p>
+        <button class="example-chip" data-query="I have a persistent cough, fever, and fatigue">Cough, fever, fatigue</button>
+        <button class="example-chip" data-query="I have a severe headache and sensitivity to light">Headache, light sensitivity</button>
+        <button class="example-chip" data-query="I have chest pain and shortness of breath">Chest pain, breathlessness</button>
+        <button class="example-chip" data-query="I have a skin rash with chills and weakness">Rash with chills</button>
+      </div>
+      <div class="sidebar-footer">
+        <p class="disclaimer-note">For informational use only. Always consult a licensed healthcare professional.</p>
+      </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <main class="chat-area">
+      <header class="chat-header">
+        <div class="header-title">
+          <span class="status-dot"></span>
+          Symptom Analysis
+        </div>
+        <button class="clear-btn" id="clearBtn">Clear Chat</button>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="welcome-block">
+          <h1 class="welcome-title">How are you feeling?</h1>
+          <p class="welcome-sub">Describe your symptoms in plain language. Pulse AI will search relevant medical literature and provide an informed response.</p>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea
+            id="userInput"
+            class="chat-input"
+            placeholder="Describe your symptoms, e.g. I have a fever, headache, and body aches..."
+            rows="1"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" aria-label="Send message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <p class="input-note">Pulse AI may make mistakes. Always verify with a medical professional.</p>
+      </div>
+    </main>
+
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

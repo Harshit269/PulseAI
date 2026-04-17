@@ -1,62 +1,73 @@
 import os
+import logging
+from typing import Generator
 from pinecone import Pinecone
 from dotenv import load_dotenv
 from groq import Groq
 from embedding import create_embedding
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
+# ── Clients ────────────────────────────────────────────────────────────────────
 pc     = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index  = pc.Index("pulse-ai")
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 NAMESPACE        = "pubmed-data"
-MAIN_MODEL       = "llama-3.3-70b-versatile"   # smart, conversational, free on Groq
-CLASSIFIER_MODEL = "llama-3.1-8b-instant"       # fast, cheap — only used for intent classification
+MAIN_MODEL       = "llama-3.3-70b-versatile"
+CLASSIFIER_MODEL = "llama-3.1-8b-instant"
 
+# ── Optional cross-encoder reranker ───────────────────────────────────────────
+try:
+    from sentence_transformers import CrossEncoder
+    _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    RERANKER_AVAILABLE = True
+    logger.info("Cross-encoder reranker loaded.")
+except Exception as e:
+    _reranker = None
+    RERANKER_AVAILABLE = False
+    logger.warning(f"Reranker unavailable, falling back to cosine order: {e}")
+
+# ── System prompt ──────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Pulse AI — a knowledgeable, empathetic medical research assistant with a warm and human personality.
 
-You have two modes, and you switch between them naturally:
+You operate in two modes and switch between them naturally:
 
 MEDICAL MODE — when the user describes symptoms, asks about conditions, medications, or health concerns:
-  • Draw on the retrieved PubMed context provided to give an informed, thoughtful response.
+  • Use the retrieved PubMed context provided to give an informed, thoughtful response.
+  • When citing information, naturally reference the source in your prose — e.g. "According to a study on respiratory infections..." or "Research on this condition suggests...". Do NOT use numbered citations or footnotes.
   • Surface possible conditions and general guidance based on the literature.
   • NEVER give a definitive diagnosis. Always recommend consulting a licensed healthcare professional.
   • Acknowledge the user's concern with empathy before diving into information.
 
-CONVERSATIONAL MODE — when the user is chatting, asking about you, following up, or saying something casual:
-  • Respond like a warm, intelligent human companion would.
-  • Be natural, engaging, and personable. Match the user's energy.
-  • If they say "hi" or "thanks", just respond naturally — don't force medical content.
-  • If a follow-up question references the previous conversation, answer it directly and coherently.
+CONVERSATIONAL MODE — when the user is chatting, asking follow-ups, or being casual:
+  • Respond like a warm, intelligent human companion. Match the user's energy.
+  • If they say "hi" or "thanks", just respond naturally — do not force medical content.
+  • If a follow-up references prior conversation, answer it directly and coherently.
 
-General rules that always apply:
+Always:
   • Remember everything said in this conversation and refer back to it naturally.
-  • Never use markdown formatting (no bold, no bullets, no headers) — respond in clean, flowing prose.
+  • Never use markdown formatting (no bold, no bullets, no headers) — flowing prose only.
   • Be concise when the answer is simple. Be thorough when the topic is serious.
   • Sound like a real person, not a help document."""
 
 
+# ── Intent classifier ──────────────────────────────────────────────────────────
 def classify_intent(message: str) -> str:
-    """
-    Uses a fast small model to classify the message.
-    Returns 'MEDICAL' if health-related, 'CHAT' otherwise.
-    """
     try:
         resp = client.chat.completions.create(
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are an intent classifier. Classify the user's message into one of two categories:\n"
-                        "MEDICAL — the user is describing symptoms, a health condition, a medication, a body part concern, "
-                        "or asking a health/medical question.\n"
-                        "CHAT — the user is greeting, making small talk, asking about the assistant, saying thanks, "
-                        "asking a follow-up question about a previous answer, or anything non-medical.\n"
-                        "Reply with exactly one word: MEDICAL or CHAT. Nothing else."
-                    )
+                        "Classify the user message as exactly one of: MEDICAL or CHAT.\n"
+                        "MEDICAL: symptoms, conditions, medications, body concerns, health questions.\n"
+                        "CHAT: greetings, small talk, follow-up questions, thanks, questions about the assistant.\n"
+                        "Reply with one word only: MEDICAL or CHAT."
+                    ),
                 },
-                {"role": "user", "content": message}
+                {"role": "user", "content": message},
             ],
             model=CLASSIFIER_MODEL,
             temperature=0,
@@ -64,76 +75,133 @@ def classify_intent(message: str) -> str:
         )
         label = resp.choices[0].message.content.strip().upper()
         return "MEDICAL" if "MEDICAL" in label else "CHAT"
-    except Exception:
-        # If classification fails, default to MEDICAL to be safe
+    except Exception as e:
+        logger.warning(f"Intent classification failed, defaulting to MEDICAL: {e}")
         return "MEDICAL"
 
 
-def retrieve_context(query: str, k: int = 4) -> list[str]:
-    embedding = create_embedding(query)
-    results = index.query(
-        vector=embedding,
-        top_k=k,
-        include_metadata=True,
-        namespace=NAMESPACE,
-    )
-    return [m["metadata"]["context"] for m in results["matches"] if m.get("metadata", {}).get("context")]
+# ── Retrieval + reranking ──────────────────────────────────────────────────────
+def retrieve_and_rerank(query: str, k_retrieve: int = 10, k_final: int = 3):
+    try:
+        embedding = create_embedding(query)
+    except Exception as e:
+        raise RuntimeError(f"Embedding step failed: {e}") from e
+
+    try:
+        results = index.query(
+            vector=embedding,
+            top_k=k_retrieve,
+            include_metadata=True,
+            namespace=NAMESPACE,
+        )
+        matches = results.get("matches", [])
+    except Exception as e:
+        raise RuntimeError(f"Pinecone retrieval failed: {e}") from e
+
+    if not matches:
+        return [], []
+
+    if RERANKER_AVAILABLE and len(matches) > 1:
+        try:
+            pairs = [(query, m["metadata"].get("context", "")) for m in matches]
+            scores = _reranker.predict(pairs)
+            ranked = sorted(zip(scores, matches), key=lambda x: x[0], reverse=True)
+            matches = [m for _, m in ranked[:k_final]]
+        except Exception as e:
+            logger.warning(f"Reranking failed, using cosine order: {e}")
+            matches = matches[:k_final]
+    else:
+        matches = matches[:k_final]
+
+    contexts = [m["metadata"].get("context", "") for m in matches if m["metadata"].get("context")]
+    sources = [
+        {
+            "title": m["metadata"].get("title", "PubMed article"),
+            "pubid": m.get("id", ""),
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{m.get('id', '')}/",
+        }
+        for m in matches
+    ]
+    return contexts, sources
 
 
-def build_messages(history: list[dict], user_message: str, context_text: str | None = None) -> list[dict]:
-    """
-    Builds the full messages array for the LLM.
-    history: list of {role: 'user'|'assistant', content: str}
-    """
+# ── Message builder ────────────────────────────────────────────────────────────
+def build_messages(history: list, user_message: str, context_text: str | None = None) -> list:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    # Inject conversation history (cap at last 12 turns to stay within context limits)
     for turn in history[-12:]:
         if turn.get("role") in ("user", "assistant") and turn.get("content"):
             messages.append({"role": turn["role"], "content": turn["content"]})
 
-    # Build the final user message, optionally with RAG context
-    if context_text:
-        final_user_content = (
-            f"Patient message: {user_message}\n\n"
-            f"Retrieved PubMed context (use this to inform your response):\n{context_text}"
-        )
-    else:
-        final_user_content = user_message
-
-    messages.append({"role": "user", "content": final_user_content})
+    final_content = (
+        f"Patient message: {user_message}\n\nRetrieved PubMed context:\n{context_text}"
+        if context_text
+        else user_message
+    )
+    messages.append({"role": "user", "content": final_content})
     return messages
 
 
-def run_pipeline(query: str, history: list[dict] | None = None) -> str:
+# ── Streaming pipeline ─────────────────────────────────────────────────────────
+def stream_pipeline(query: str, history: list | None = None) -> Generator:
+    """
+    Yields dicts:
+      {"type": "text",    "content": "<chunk>"}
+      {"type": "sources", "content": [{title, pubid, url}]}
+      {"type": "warning", "content": "<message>"}
+      {"type": "error",   "content": "<message>"}
+    """
     if history is None:
         history = []
 
     if not query or not query.strip():
-        return "I didn't catch that — could you describe how you're feeling?"
+        yield {"type": "text", "content": "I didn't catch that — could you describe how you're feeling?"}
+        return
 
-    # Step 1: classify intent
     intent = classify_intent(query)
 
-    # Step 2: if medical, retrieve relevant PubMed context
     context_text = None
+    sources = []
     if intent == "MEDICAL":
         try:
-            contexts = retrieve_context(query)
+            contexts, sources = retrieve_and_rerank(query)
             if contexts:
                 context_text = "\n\n---\n\n".join(contexts)
-        except Exception:
-            # Retrieval failed — still respond, just without RAG context
-            context_text = None
+        except RuntimeError as e:
+            logger.error(f"Retrieval error: {e}")
+            yield {
+                "type": "warning",
+                "content": "I'm having trouble searching the medical database right now, but I'll do my best with what I know.",
+            }
 
-    # Step 3: build message array and generate response
     messages = build_messages(history, query, context_text)
 
-    response = client.chat.completions.create(
-        messages=messages,
-        model=MAIN_MODEL,
-        temperature=0.6,        # Slightly higher for more natural, varied responses
-        max_tokens=700,
-    )
+    try:
+        stream = client.chat.completions.create(
+            messages=messages,
+            model=MAIN_MODEL,
+            temperature=0.6,
+            max_tokens=700,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                yield {"type": "text", "content": delta}
+    except Exception as e:
+        logger.error(f"LLM streaming error: {e}")
+        yield {"type": "error", "content": "Something went wrong generating a response. Please try again."}
+        return
 
-    return response.choices[0].message.content.strip()
+    if sources:
+        yield {"type": "sources", "content": sources}
+
+
+# ── Non-streaming (for link summaries) ────────────────────────────────────────
+def run_pipeline(query: str, history: list | None = None) -> str:
+    parts = []
+    for event in stream_pipeline(query, history):
+        if event["type"] == "text":
+            parts.append(event["content"])
+        elif event["type"] in ("error", "warning") and not parts:
+            return event["content"]
+    return "".join(parts).strip() or "I couldn't generate a response. Please try again."

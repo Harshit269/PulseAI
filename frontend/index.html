@@ -423,6 +423,58 @@
     .empty-icon svg { width: 32px; height: 32px; }
     .empty-label { font-size: 12.5px; color: var(--text-3); line-height: 1.6; }
 
+    /* ── SEND BUTTON SPINNER ───────────────────────────────────────────────── */
+    .send-btn .icon-send { display: flex; }
+    .send-btn .icon-spin { display: none; }
+    .send-btn:disabled .icon-send { display: none; }
+    .send-btn:disabled .icon-spin { display: flex; align-items: center; justify-content: center; }
+    .spin-ring {
+      width: 15px; height: 15px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: var(--text-3);
+      animation: spin .7s linear infinite;
+    }
+
+    /* ── STREAMING CURSOR ──────────────────────────────────────────────────── */
+    .streaming-cursor {
+      display: inline-block; width: 2px; height: 14px;
+      background: var(--accent); margin-left: 2px; vertical-align: middle;
+      animation: blink .9s step-end infinite;
+    }
+
+    /* ── SOURCE CHIPS ──────────────────────────────────────────────────────── */
+    .sources-row {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      margin-top: 8px; padding: 0 2px;
+      animation: msgIn .2s ease;
+    }
+    .sources-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--text-3); flex-shrink: 0;
+    }
+    .source-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 100px; padding: 3px 10px 3px 7px;
+      font-size: 11px; color: var(--text-2);
+      text-decoration: none; cursor: pointer;
+      transition: all .15s; max-width: 220px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .source-chip:hover { border-color: var(--border-focus); color: var(--accent); background: var(--accent-dim); }
+    .source-chip svg { width: 10px; height: 10px; flex-shrink: 0; }
+
+    /* ── TOAST ──────────────────────────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 10px 18px;
+      font-size: 13px; color: var(--text-2); z-index: 3000;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+      animation: toastIn .2s ease; pointer-events: none;
+    }
+    .toast.warning { color: var(--danger); border-color: rgba(240,128,128,.25); }
+
     /* ── ANIMATIONS ─────────────────────────────────────────────────────────── */
     @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
     @keyframes slideUp { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
@@ -439,6 +491,9 @@
       0%,100% { opacity:.4 }
       50% { opacity:.8 }
     }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    @keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
+    @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(8px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }
 
     /* ── RESPONSIVE ─────────────────────────────────────────────────────────── */
     @media(max-width: 768px) {
@@ -530,7 +585,8 @@
         <div class="input-wrapper">
           <textarea id="userInput" class="chat-input" placeholder="Describe your symptoms, e.g. I have a fever, headache, and body aches…" rows="1"></textarea>
           <button class="send-btn" id="sendBtn" aria-label="Send">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <span class="icon-send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span>
+            <span class="icon-spin"><div class="spin-ring"></div></span>
           </button>
         </div>
         <div class="input-meta">
@@ -575,15 +631,54 @@ const closePreviewBtn = document.getElementById('closePreviewBtn');
 const exampleChips = document.querySelectorAll('.example-chip');
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g;
+const LS_DISCLAIMER = 'pulse_disclaimer_v1';
+const LS_HISTORY    = 'pulse_history_v1';
 
 // ── Conversation history ───────────────────────────────────────────────────────
-// Each entry: { role: 'user' | 'assistant', content: string }
-// Kept in memory; cleared on "Clear chat". Capped at 24 turns before sending
-// (backend also caps at 12 to stay within context limits).
 let conversationHistory = [];
 
-// ── Modal ──────────────────────────────────────────────────────────────────────
+// ── Restore persisted conversation ────────────────────────────────────────────
+(function restoreSession() {
+  try {
+    const saved = localStorage.getItem(LS_HISTORY);
+    if (!saved) return;
+    const { history, messages } = JSON.parse(saved);
+    conversationHistory = history || [];
+
+    if (messages && messages.length > 0) {
+      const welcome = messagesEl.querySelector('.welcome-block');
+      if (welcome) welcome.remove();
+      messages.forEach(({ role, text, sources, isError }) => {
+        appendMessage(role, text, isError || false, sources || []);
+      });
+    }
+  } catch (e) {
+    console.warn('Could not restore session:', e);
+  }
+})();
+
+function persistSession(messages) {
+  try {
+    localStorage.setItem(LS_HISTORY, JSON.stringify({
+      history: conversationHistory,
+      messages,
+    }));
+  } catch (e) {
+    console.warn('Could not persist session:', e);
+  }
+}
+
+// Stored message log for persistence (role, text, sources)
+const _messageLog = [];
+
+// ── Disclaimer — only show once ────────────────────────────────────────────────
+if (localStorage.getItem(LS_DISCLAIMER)) {
+  modal.classList.add('hidden');
+} else {
+  modal.classList.remove('hidden');
+}
 acceptBtn.addEventListener('click', () => {
+  localStorage.setItem(LS_DISCLAIMER, '1');
   modal.classList.add('hidden');
   userInput.focus();
 });
@@ -607,12 +702,13 @@ exampleChips.forEach(chip => {
 userInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-
 sendBtn.addEventListener('click', sendMessage);
 
 // ── Clear chat ─────────────────────────────────────────────────────────────────
 clearBtn.addEventListener('click', () => {
   conversationHistory = [];
+  _messageLog.length = 0;
+  localStorage.removeItem(LS_HISTORY);
   messagesEl.innerHTML = `
     <div class="welcome-block">
       <div class="welcome-eyebrow">Pulse AI · Medical Research Assistant</div>
@@ -624,19 +720,18 @@ clearBtn.addEventListener('click', () => {
 
 // ── Close preview ──────────────────────────────────────────────────────────────
 closePreviewBtn.addEventListener('click', closePreview);
-
 function closePreview() {
   app.classList.remove('preview-open');
   setTimeout(() => {
     previewBody.innerHTML = `
-      <div class="empty-preview" id="emptyPreview">
+      <div class="empty-preview">
         <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
         <p class="empty-label">Share a link in the chat<br/>to see a preview and summary here.</p>
       </div>`;
   }, 380);
 }
 
-// ── Send message ───────────────────────────────────────────────────────────────
+// ── Send message (streaming) ───────────────────────────────────────────────────
 async function sendMessage() {
   const text = userInput.value.trim();
   if (!text || sendBtn.disabled) return;
@@ -645,59 +740,124 @@ async function sendMessage() {
   if (welcome) welcome.remove();
 
   const urls = text.match(URL_RE) || [];
-
-  // Add to history BEFORE sending so the backend doesn't double-count it
-  // (we add it here; backend receives history up to the turn before this one)
   const historySnapshot = conversationHistory.slice(-24);
 
+  // Render user bubble
   appendMessage('user', text);
+  _messageLog.push({ role: 'user', text });
+
   userInput.value = '';
   userInput.style.height = 'auto';
   sendBtn.disabled = true;
 
-  const typingEl = appendTyping();
+  // Create AI bubble early for streaming
+  const aiGroup = document.createElement('div');
+  aiGroup.className = 'msg-group ai';
+  const aiSender = document.createElement('div');
+  aiSender.className = 'msg-sender';
+  aiSender.textContent = 'Pulse AI';
+  const aiBubble = document.createElement('div');
+  aiBubble.className = 'bubble';
 
-  let aiText = null;
+  // Typing dots while waiting for first chunk
+  aiBubble.innerHTML = '<div class="typing-bubble" style="padding:0;background:transparent;border:none;"><div class="t-dot"></div><div class="t-dot"></div><div class="t-dot"></div></div>';
+  aiGroup.appendChild(aiSender);
+  aiGroup.appendChild(aiBubble);
+  messagesEl.appendChild(aiGroup);
+  scrollBottom();
+
+  let fullText = '';
+  let streamStarted = false;
+  let receivedSources = [];
+
   try {
-    const res = await fetch(`${API_BASE}/chat`, {
+    const res = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: text,
-        history: historySnapshot,   // ← send conversation history
-      }),
+      body: JSON.stringify({ message: text, history: historySnapshot }),
     });
-
-    typingEl.remove();
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-      const errMsg = err.detail || 'Something went wrong. Please try again.';
-      appendMessage('ai', errMsg, true);
-      // Don't add errors to history
+      aiBubble.textContent = err.detail || 'Something went wrong. Please try again.';
+      aiBubble.classList.add('error');
     } else {
-      const data = await res.json();
-      aiText = data.response;
-      appendMessage('ai', aiText);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // hold incomplete line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') break;
+
+          let event;
+          try { event = JSON.parse(raw); } catch { continue; }
+
+          if (event.type === 'text') {
+            if (!streamStarted) {
+              aiBubble.textContent = '';  // clear typing dots
+              streamStarted = true;
+            }
+            fullText += event.content;
+            // Update text with blinking cursor
+            aiBubble.innerHTML = escapeHtml(fullText) + '<span class="streaming-cursor"></span>';
+            scrollBottom();
+
+          } else if (event.type === 'sources') {
+            receivedSources = event.content || [];
+
+          } else if (event.type === 'warning') {
+            showToast(event.content, 'warning');
+
+          } else if (event.type === 'error') {
+            if (!streamStarted) aiBubble.textContent = '';
+            aiBubble.textContent = event.content;
+            aiBubble.classList.add('error');
+            fullText = event.content;
+          }
+        }
+      }
+
+      // Remove cursor after streaming done
+      aiBubble.textContent = fullText;
+
+      // Render source chips if any
+      if (receivedSources.length > 0) {
+        renderSources(aiGroup, receivedSources);
+      }
     }
-  } catch {
-    typingEl.remove();
-    appendMessage('ai', 'Could not reach the server. Please check your connection and try again.', true);
+  } catch (err) {
+    aiBubble.textContent = 'Could not reach the server. Please check your connection and try again.';
+    aiBubble.classList.add('error');
+    fullText = aiBubble.textContent;
   } finally {
     sendBtn.disabled = false;
     userInput.focus();
   }
 
-  // Update history with this exchange
+  // Update history
   conversationHistory.push({ role: 'user', content: text });
-  if (aiText) conversationHistory.push({ role: 'assistant', content: aiText });
+  if (fullText) conversationHistory.push({ role: 'assistant', content: fullText });
 
-  // Trigger link preview for first detected URL
+  // Persist
+  _messageLog.push({ role: 'ai', text: fullText, sources: receivedSources });
+  persistSession(_messageLog);
+
+  // Link preview
   if (urls.length > 0) openLinkPreview(urls[0]);
 }
 
-// ── Render message ─────────────────────────────────────────────────────────────
-function appendMessage(role, text, isError = false) {
+// ── Render a message (used for initial render and session restore) ─────────────
+function appendMessage(role, text, isError = false, sources = []) {
   const group = document.createElement('div');
   group.className = `msg-group ${role}`;
 
@@ -708,8 +868,10 @@ function appendMessage(role, text, isError = false) {
   const bubble = document.createElement('div');
   bubble.className = `bubble${isError ? ' error' : ''}`;
 
-  if (role === 'user' && URL_RE.test(text)) {
-    URL_RE.lastIndex = 0;
+  const hasUrls = URL_RE.test(text);
+  URL_RE.lastIndex = 0;
+
+  if (role === 'user' && hasUrls) {
     bubble.innerHTML = linkify(text);
     bubble.querySelectorAll('.link-chip').forEach(chip => {
       chip.addEventListener('click', e => {
@@ -724,12 +886,41 @@ function appendMessage(role, text, isError = false) {
   group.appendChild(sender);
   group.appendChild(bubble);
   messagesEl.appendChild(group);
+
+  if (sources && sources.length > 0) renderSources(group, sources);
+
   scrollBottom();
   return group;
 }
 
+// ── Source chips ───────────────────────────────────────────────────────────────
+function renderSources(group, sources) {
+  const row = document.createElement('div');
+  row.className = 'sources-row';
+
+  const label = document.createElement('span');
+  label.className = 'sources-label';
+  label.textContent = 'Sources';
+  row.appendChild(label);
+
+  sources.forEach(src => {
+    const chip = document.createElement('a');
+    chip.className = 'source-chip';
+    chip.href = src.url;
+    chip.target = '_blank';
+    chip.rel = 'noopener noreferrer';
+    chip.title = src.title;
+    chip.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>${src.title.length > 40 ? src.title.slice(0, 40) + '…' : src.title}`;
+    row.appendChild(chip);
+  });
+
+  group.appendChild(row);
+  scrollBottom();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function linkify(text) {
-  return text.replace(URL_RE, url => {
+  return escapeHtml(text).replace(/https?:\/\/[^\s<>"']+/g, url => {
     let display;
     try { display = new URL(url).hostname; } catch { display = url; }
     return `<a class="link-chip" href="#" data-url="${url}">
@@ -739,29 +930,23 @@ function linkify(text) {
   });
 }
 
-// ── Typing indicator ───────────────────────────────────────────────────────────
-function appendTyping() {
-  const group = document.createElement('div');
-  group.className = 'msg-group ai';
-  const sender = document.createElement('div');
-  sender.className = 'msg-sender';
-  sender.textContent = 'Pulse AI';
-  const bubble = document.createElement('div');
-  bubble.className = 'typing-bubble';
-  bubble.innerHTML = '<div class="t-dot"></div><div class="t-dot"></div><div class="t-dot"></div>';
-  group.appendChild(sender);
-  group.appendChild(bubble);
-  messagesEl.appendChild(group);
-  scrollBottom();
-  return group;
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
+function showToast(msg, type = '') {
+  const t = document.createElement('div');
+  t.className = `toast${type ? ' ' + type : ''}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
 // ── Link Preview Panel ─────────────────────────────────────────────────────────
 async function openLinkPreview(url) {
   app.classList.add('preview-open');
-
   let hostname;
   try { hostname = new URL(url).hostname; } catch { hostname = url; }
 
@@ -812,7 +997,6 @@ async function fetchSummary(url) {
     </div>`;
 
   try {
-    // Use a clean history-free request — link summaries are independent of chat
     const res = await fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -827,7 +1011,7 @@ async function fetchSummary(url) {
       try {
         const slug = new URL(url).pathname.split('/').filter(Boolean).pop() || new URL(url).hostname;
         titleEl.textContent = decodeURIComponent(slug).replace(/[-_]/g, ' ');
-      } catch { titleEl.textContent = hostname; }
+      } catch { titleEl.textContent = url; }
     }
 
     if (res.ok) {

@@ -18,6 +18,16 @@ NAMESPACE        = "pubmed-data"
 MAIN_MODEL       = "llama-3.3-70b-versatile"
 CLASSIFIER_MODEL = "llama-3.1-8b-instant"   # also used for reranking — fast & free
 
+# ── Doctor contact config ──────────────────────────────────────────────────────
+# Set DOCTOR_NAME / DOCTOR_PHONE / DOCTOR_NOTE in your .env to override.
+# Later: replace with a location-based lookup API.
+DOCTOR_CONTACT = {
+    "name":  os.getenv("DOCTOR_NAME",  "Dr. ME"),
+    "phone": os.getenv("DOCTOR_PHONE", "+91 8655231832"),
+    "specialty": os.getenv("DOCTOR_SPECIALTY", "General Physician"),
+    "note":  os.getenv("DOCTOR_NOTE",  "Available Mon–Sat, 9 AM – 7 PM"),
+}
+
 # ── System prompt ──────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Pulse AI — a knowledgeable, empathetic medical research assistant with a warm and human personality.
 
@@ -194,6 +204,7 @@ def stream_pipeline(query: str, history: list | None = None) -> Generator:
     Yields dicts:
       {"type": "text",    "content": "<chunk>"}
       {"type": "sources", "content": [{title, pubid, url}]}
+      {"type": "doctor",  "content": {name, phone, specialty, note}}
       {"type": "warning", "content": "<message>"}
       {"type": "error",   "content": "<message>"}
     """
@@ -241,6 +252,10 @@ def stream_pipeline(query: str, history: list | None = None) -> Generator:
 
     if sources:
         yield {"type": "sources", "content": sources}
+
+    # Always suggest a doctor for medical queries
+    if intent == "MEDICAL":
+        yield {"type": "doctor", "content": DOCTOR_CONTACT}
 
 
 # ── Non-streaming (for link summaries) ────────────────────────────────────────

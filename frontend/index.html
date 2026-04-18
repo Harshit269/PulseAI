@@ -540,8 +540,9 @@
       display: none; position: fixed; inset: 0; z-index: 900;
       background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
       opacity: 0; transition: opacity .3s ease;
+      pointer-events: none;
     }
-    .mob-drawer-overlay.visible { opacity: 1; }
+    .mob-drawer-overlay.visible { opacity: 1; pointer-events: auto; }
 
     /* ── RESPONSIVE ───────────────────────────────────────────────────────── */
     @media(max-width: 768px) {
@@ -799,7 +800,6 @@ let searchQ  = '';
 // ── Disclaimer ─────────────────────────────────────────────────────────────────
 acceptBtn.addEventListener('click', () => {
   modal.classList.add('hidden');
-  userInput.focus();
 });
 
 // ── New chat buttons ───────────────────────────────────────────────────────────

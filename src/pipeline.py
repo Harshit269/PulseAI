@@ -23,7 +23,7 @@ CLASSIFIER_MODEL = "llama-3.1-8b-instant"   # also used for reranking — fast &
 # Later: replace with a location-based lookup API.
 DOCTOR_CONTACT = {
     "name":  os.getenv("DOCTOR_NAME",  "Dr. ME"),
-    "phone": os.getenv("DOCTOR_PHONE", "+91 8655231832git "),
+    "phone": os.getenv("DOCTOR_PHONE", "+91 8655231832"),
     "specialty": os.getenv("DOCTOR_SPECIALTY", "General Physician"),
     "note":  os.getenv("DOCTOR_NOTE",  "Available Mon–Sat, 9 AM – 7 PM"),
 }

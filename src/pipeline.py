@@ -16,18 +16,7 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 NAMESPACE        = "pubmed-data"
 MAIN_MODEL       = "llama-3.3-70b-versatile"
-CLASSIFIER_MODEL = "llama-3.1-8b-instant"
-
-# ── Optional cross-encoder reranker ───────────────────────────────────────────
-try:
-    from sentence_transformers import CrossEncoder
-    _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-    RERANKER_AVAILABLE = True
-    logger.info("Cross-encoder reranker loaded.")
-except Exception as e:
-    _reranker = None
-    RERANKER_AVAILABLE = False
-    logger.warning(f"Reranker unavailable, falling back to cosine order: {e}")
+CLASSIFIER_MODEL = "llama-3.1-8b-instant"   # also used for reranking — fast & free
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Pulse AI — a knowledgeable, empathetic medical research assistant with a warm and human personality.
@@ -55,6 +44,7 @@ Always:
 
 # ── Intent classifier ──────────────────────────────────────────────────────────
 def classify_intent(message: str) -> str:
+    """Returns 'MEDICAL' or 'CHAT'."""
     try:
         resp = client.chat.completions.create(
             messages=[
@@ -80,9 +70,70 @@ def classify_intent(message: str) -> str:
         return "MEDICAL"
 
 
-# ── Retrieval + reranking ──────────────────────────────────────────────────────
-def retrieve_and_rerank(query: str, k_retrieve: int = 10, k_final: int = 3):
+# ── LLM-based reranker ─────────────────────────────────────────────────────────
+def llm_rerank(query: str, matches: list, k_final: int = 3) -> list:
+    """
+    Uses the fast 8b model to score each retrieved chunk's relevance to the query
+    in a single API call. Returns the top k_final matches sorted by score.
+
+    Scoring prompt asks for a 0-10 integer per chunk. We parse the response and
+    sort — no local model, no download, no cold-start delay.
+    """
+    if not matches:
+        return []
+    if len(matches) <= k_final:
+        return matches
+
+    # Build a numbered list of chunks for the model to score
+    chunks_text = "\n\n".join(
+        f"[{i+1}] {m['metadata'].get('context', '')[:400]}"
+        for i, m in enumerate(matches)
+    )
+
+    prompt = (
+        f"Query: {query}\n\n"
+        f"Below are {len(matches)} text chunks retrieved from a medical database. "
+        f"Score each chunk's relevance to the query on a scale of 0-10, "
+        f"where 10 = highly relevant and 0 = completely irrelevant.\n\n"
+        f"{chunks_text}\n\n"
+        f"Reply with ONLY a comma-separated list of scores in order, e.g.: 8,3,7,2,9\n"
+        f"No explanation, no labels — just the numbers."
+    )
+
     try:
+        resp = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "You are a precise relevance scoring assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            model=CLASSIFIER_MODEL,
+            temperature=0,
+            max_tokens=60,
+        )
+        raw = resp.choices[0].message.content.strip()
+        scores = [float(s.strip()) for s in raw.split(",") if s.strip().replace(".", "").isdigit()]
+
+        if len(scores) != len(matches):
+            logger.warning(f"Reranker score count mismatch ({len(scores)} vs {len(matches)}), using cosine order")
+            return matches[:k_final]
+
+        ranked = sorted(zip(scores, matches), key=lambda x: x[0], reverse=True)
+        return [m for _, m in ranked[:k_final]]
+
+    except Exception as e:
+        logger.warning(f"LLM reranking failed, using cosine order: {e}")
+        return matches[:k_final]
+
+
+# ── Retrieval ──────────────────────────────────────────────────────────────────
+def retrieve_and_rerank(query: str, k_retrieve: int = 10, k_final: int = 3):
+    """
+    Returns (contexts, sources).
+    Embeds only the query (not context), retrieves k_retrieve candidates,
+    then reranks via LLM to return the best k_final.
+    """
+    try:
+        # Embed only the query — keeps vectors clean and focused
         embedding = create_embedding(query)
     except Exception as e:
         raise RuntimeError(f"Embedding step failed: {e}") from e
@@ -101,26 +152,22 @@ def retrieve_and_rerank(query: str, k_retrieve: int = 10, k_final: int = 3):
     if not matches:
         return [], []
 
-    if RERANKER_AVAILABLE and len(matches) > 1:
-        try:
-            pairs = [(query, m["metadata"].get("context", "")) for m in matches]
-            scores = _reranker.predict(pairs)
-            ranked = sorted(zip(scores, matches), key=lambda x: x[0], reverse=True)
-            matches = [m for _, m in ranked[:k_final]]
-        except Exception as e:
-            logger.warning(f"Reranking failed, using cosine order: {e}")
-            matches = matches[:k_final]
-    else:
-        matches = matches[:k_final]
+    # Filter out very low-confidence matches (cosine score < 0.3)
+    matches = [m for m in matches if m.get("score", 1) >= 0.3]
+    if not matches:
+        return [], []
 
-    contexts = [m["metadata"].get("context", "") for m in matches if m["metadata"].get("context")]
+    # LLM rerank — single API call, no local model
+    best = llm_rerank(query, matches, k_final=k_final)
+
+    contexts = [m["metadata"].get("context", "") for m in best if m["metadata"].get("context")]
     sources = [
         {
             "title": m["metadata"].get("title", "PubMed article"),
             "pubid": m.get("id", ""),
             "url": f"https://pubmed.ncbi.nlm.nih.gov/{m.get('id', '')}/",
         }
-        for m in matches
+        for m in best
     ]
     return contexts, sources
 
